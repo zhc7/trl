@@ -1,10 +1,20 @@
 """
-First checkout the trl branch:
+1. First checkout the trl branch:
 
 git clone https://github.com/huggingface/trl.git
 git checkout debug-dpo
 
-Run with:
+2. Install deps with:
+
+make dev
+
+Then install latest versions of transformers / accelerate / deepspeed
+
+pip install transformers==4.39.1 accelerate==0.28.0 deepspeed==0.14.0
+
+See examples/scripts/requirements.txt for exact versions.
+
+3. Run with:
 
 TRANSFORMERS_VERBOSITY=info ACCELERATE_LOG_LEVEL=info accelerate launch --config_file=examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/debug_text_gen_dpo.py
 
@@ -49,17 +59,16 @@ from typing import Any, Dict, Tuple, Union
 
 import torch
 import torch.nn as nn
+from datasets import Dataset
 from transformers import (
-    PreTrainedModel,
-    TrainingArguments,
     AutoModelForCausalLM,
     AutoTokenizer,
+    PreTrainedModel,
+    TrainingArguments,
 )
 
 from trl import DPOTrainer
 from trl.models.utils import unwrap_model_for_generation
-
-from datasets import Dataset
 
 
 class MyDPOTrainer(DPOTrainer):
@@ -79,16 +88,10 @@ class MyDPOTrainer(DPOTrainer):
             generations = unwrapped_model.generate(inputs["prompt_input_ids"])
             print(f"Generations: {self.tokenizer.batch_decode(generations)}")
 
-        compute_loss_context_manager = (
-            torch.cuda.amp.autocast
-            if self._peft_has_been_casted_to_bf16
-            else nullcontext
-        )
+        compute_loss_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
 
         with compute_loss_context_manager():
-            loss, metrics = self.get_batch_loss_metrics(
-                model, inputs, train_eval="train"
-            )
+            loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
         # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
         loss = loss.to(self.args.device)
@@ -106,7 +109,7 @@ def main():
         per_device_train_batch_size=2,
         max_steps=3,
         remove_unused_columns=False,
-        gradient_accumulation_steps=2, # Runs fine with gradient_accumulation_steps=1
+        gradient_accumulation_steps=2,  # Runs fine with gradient_accumulation_steps=1
         learning_rate=9e-1,
         evaluation_strategy="steps",
         bf16=True,
