@@ -85,8 +85,17 @@ class MyDPOTrainer(DPOTrainer):
             )
 
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+            import time 
+            start_time = time.time()
             generations = unwrapped_model.generate(inputs["prompt_input_ids"])
-            print(f"Generations: {self.tokenizer.batch_decode(generations)}")
+            generation_time = torch.tensor([time.time() - start_time]).to(self.accelerator.device)
+
+        # Gather all gen_time and compute mean
+        generation_time_gather = self.accelerator.gather(generation_time)
+        if self.accelerator.is_main_process:
+                    print(
+                        f"Win rate generation time: {generation_time_gather.mean().item():.2f} seconds for {len(generations)} generations"
+                    )   
 
         compute_loss_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
 
@@ -107,7 +116,7 @@ def main():
     training_args = TrainingArguments(
         output_dir="scratch/dummy-model",
         per_device_train_batch_size=2,
-        max_steps=3,
+        max_steps=1,
         remove_unused_columns=False,
         gradient_accumulation_steps=2,  # Runs fine with gradient_accumulation_steps=1
         learning_rate=9e-1,
