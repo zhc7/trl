@@ -22,6 +22,8 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 
 from trl import ORPOConfig, ORPOTrainer
 
+from trl.trainer.orpo_trainer import _tokenize, _process_tokens
+
 from .testing_utils import require_peft
 
 
@@ -102,6 +104,8 @@ class ORPOTrainerTester(unittest.TestCase):
                 tokenizer = self.t5_tokenizer
                 training_args.is_encoder_decoder = True
 
+            
+
             trainer = ORPOTrainer(
                 model=model,
                 args=training_args,
@@ -122,6 +126,45 @@ class ORPOTrainerTester(unittest.TestCase):
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
                     assert not torch.equal(param, new_param)
+
+    def test_tokenize_and_process_tokens(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = ORPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+                beta=0.1,
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            trainer = ORPOTrainer(
+                model=self.model,
+                ref_model=self.ref_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tokenized_dataset = dummy_dataset.map(
+                    _tokenize,
+                    fn_kwargs={"tokenizer": trainer.tokenizer},
+                    batched=True,
+                    batch_size=2,
+                )
+                self.assertListEqual(tokenized_dataset["prompt"], dummy_dataset["prompt"])
+                self.assertListEqual(tokenized_dataset["completion"], dummy_dataset["completion"])
+                self.assertListEqual(tokenized_dataset["label"], dummy_dataset["label"])
+                self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [10814, 11])
+                self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1])
+                self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [5968, 1219, 72, 3621, 284, 1826, 345])
+                self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
 
     @require_peft
     @mark.peft_test
