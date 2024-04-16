@@ -93,19 +93,12 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
         label_pad_token_id  for the prompt tokens.
     """
     batch = {}
-    prompt = example["prompt"]
-    chosen = example["chosen"]
-    rejected = example["rejected"]
 
     if not kwargs["is_encoder_decoder"]:
         # Check issues below for more details
         #  1. https://github.com/huggingface/trl/issues/907
         #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
         #  3. https://github.com/LianjiaTech/BELLE/issues/337
-
-        for key in ["prompt", "chosen", "rejected"]:
-            if not isinstance(example[key], str):
-                raise ValueError(f"{key} should be an str but got {type(example[key])}")
 
         all_tokens = {
             "prompt_input_ids": example["prompt_input_ids"],
@@ -130,9 +123,11 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
                     raise ValueError(f"Unknown truncation mode: {kwargs['truncation_mode']}")
 
         # If that's still too long, truncate the response
-        for k in ["chosen_input_ids", "rejected_input_ids"]:
+        for k in ["chosen", "rejected"]:
             if longer_response_length > kwargs["max_length"]:
-                all_tokens[k] = all_tokens[k][: kwargs["max_length"] - kwargs["max_prompt_length"]]
+                all_tokens[f"{k}_input_ids"] = all_tokens[f"{k}_input_ids"][: kwargs["max_length"] - kwargs["max_prompt_length"]]
+                all_tokens[f"{k}_attention_mask"] = all_tokens[f"{k}_attention_mask"][: kwargs["max_length"] - kwargs["max_prompt_length"]]
+
 
         # Prepend BOS token to prompt
         for k in ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids"]:
@@ -149,15 +144,23 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
         for k in ["chosen_attention_mask", "rejected_attention_mask"]:
             all_tokens[k].append(1)
 
+
+        batch["prompt_input_ids"] = all_tokens["prompt_input_ids"]
+        batch["prompt_attention_mask"] = all_tokens["prompt_attention_mask"]
+        batch["chosen_input_ids"] = all_tokens["chosen_input_ids"]
+        batch["chosen_attention_mask"] = all_tokens["chosen_attention_mask"]
+        batch["rejected_input_ids"] = all_tokens["rejected_input_ids"]
+        batch["rejected_attention_mask"] = all_tokens["rejected_attention_mask"]
+
         # Create labels
         batch["chosen_labels"] = all_tokens["chosen_input_ids"][:]
-        batch["chosen_labels"][: len(all_tokens["prompt_input_ids"])] = [kwargs["label_pad_token_id"]] * len(
-            all_tokens["prompt_input_ids"]
-        )
+        # batch["chosen_labels"][: len(all_tokens["prompt_input_ids"])] = [kwargs["label_pad_token_id"]] * len(
+        #     all_tokens["prompt_input_ids"]
+        # )
         batch["rejected_labels"] = all_tokens["rejected_input_ids"][:]
-        batch["rejected_labels"][: len(all_tokens["prompt_input_ids"])] = [kwargs["label_pad_token_id"]] * len(
-            all_tokens["prompt_input_ids"]
-        )
+        # batch["rejected_labels"][: len(all_tokens["prompt_input_ids"])] = [kwargs["label_pad_token_id"]] * len(
+        #     all_tokens["prompt_input_ids"]
+        # )
 
     return batch
 
@@ -381,6 +384,7 @@ class ORPOTrainer(Trainer):
                 batched=True,
                 num_proc=args.dataset_num_proc,
                 desc="Tokenizing train dataset",
+                remove_columns=train_dataset.column_names,
             )
             # Prepare the datasets
             fn_kwargs = {
@@ -407,6 +411,7 @@ class ORPOTrainer(Trainer):
                 batched=True,
                 num_proc=args.dataset_num_proc,
                 desc="Tokenizing eval dataset",
+                remove_columns=eval_dataset.column_names,
                 )
                 eval_dataset = eval_dataset.map(
                 _process_tokens,

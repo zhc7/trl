@@ -59,6 +59,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
 from trl import ModelConfig, ORPOConfig, ORPOTrainer, get_peft_config
 
+import datasets
+datasets.disable_caching()
 
 @dataclass
 class ScriptArguments:
