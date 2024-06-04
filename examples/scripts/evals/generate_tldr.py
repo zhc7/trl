@@ -17,7 +17,7 @@ python -i examples/scripts/evals/generate_tldr.py \
     --output_path examples/scripts/evals/rloo_tldr.csv \
     --n 1000
 python -i examples/scripts/evals/generate_tldr.py \
-    --model_name_or_path vwxyzjn/ppo_tldr_6.9b_vllm \
+    --model_name_or_path vwxyzjn/ppo_tldr \
     --output_path examples/scripts/evals/ppo_tldr.csv \
     --n 1000
 """
@@ -28,6 +28,7 @@ class Args:
     output_path: str
     model_name_or_path: str
     model_revision: str = "main"
+    judge_model: str = "gpt-3.5-turbo-0125"
     n: int = 1000
 
 
@@ -53,8 +54,8 @@ sampling_params = SamplingParams(temperature=0.0, top_p=0.95, max_tokens=MAX_TOK
 llm = LLM(
     model=args.model_name_or_path,
     revision=args.model_revision,
+    tokenizer_revision=args.model_revision,
     tensor_parallel_size=1,
-    device="cuda:0",
 )
 outputs = llm.generate(prompts, sampling_params)
 table = defaultdict(list)
@@ -82,8 +83,13 @@ df["response1"] = df["reference_response"]
 judged_df = llm_judge(
     LLMJudgeConfig(
         n=args.n,
-        model="gpt-3.5-turbo-0125",
+        model=args.judge_model,
     ),
     df,
 )
+judged_df.rename(columns={"response0": "model_response", "response1": "reference_response"}, inplace=True)
+print(judged_df["preferred"].value_counts())
+# print percentage
+print(judged_df["preferred"].value_counts(normalize=True))
+
 judged_df.to_csv(args.output_path.replace(".csv", "_judged.csv"))
