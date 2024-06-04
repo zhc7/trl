@@ -8,17 +8,17 @@ import pandas as pd
 from datasets import load_dataset
 from gpt_tldr_judge import LLMJudgeConfig, llm_judge
 from transformers import AutoTokenizer, HfArgumentParser
-from vllm import SamplingParams, SingleGPULLM
+from vllm import LLM, SamplingParams
 
 
 """
 python -i examples/scripts/evals/generate_tldr.py \
     --model_name_or_path vwxyzjn/rloo_tldr \
-    --output_path examples/scripts/minimal/evals/rloo_tldr.csv \
+    --output_path examples/scripts/evals/rloo_tldr.csv \
     --n 1000
 python -i examples/scripts/evals/generate_tldr.py \
-    --model_name_or_path vwxyzjn/ppo_tldr \
-    --output_path examples/scripts/minimal/evals/ppo_tldr.csv \
+    --model_name_or_path vwxyzjn/ppo_tldr_6.9b_vllm \
+    --output_path examples/scripts/evals/ppo_tldr.csv \
     --n 1000
 """
 
@@ -50,7 +50,7 @@ if args.n is not None:
     prompts = prompts[: args.n]
 reference_summaries = [message[-1]["content"] for message in raw_datasets["test"]["messages"]]
 sampling_params = SamplingParams(temperature=0.0, top_p=0.95, max_tokens=MAX_TOKENS)
-llm = SingleGPULLM(
+llm = LLM(
     model=args.model_name_or_path,
     revision=args.model_revision,
     tensor_parallel_size=1,
