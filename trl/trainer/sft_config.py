@@ -56,6 +56,9 @@ class SFTConfig(TrainingArguments):
             [chars_token_ratio](https://github.com/huggingface/trl/blob/08f550674c553c36c51d1027613c29f14f3676a5/examples/stack_llama/scripts/supervised_finetuning.py#L53) for more details.
         use_liger (`bool`, *optional*, defaults to `False`):
             Monkey patch the model with Liger kernels to increase throughput and reduce memory usage.
+        completion_only (`bool`, *optional*, defaults to `False`):
+            Whether to train only on completions, ignoring prompts during loss calculation. If set to `True`, the input
+            datasets must be of type [prompt-completion](dataset_formats#prompt-completion).
     """
 
     dataset_text_field: str = "text"
@@ -70,3 +73,4 @@ class SFTConfig(TrainingArguments):
     num_of_sequences: int = 1024
     chars_per_token: float = 3.6
     use_liger: bool = False
+    completion_only: bool = False

@@ -14,6 +14,7 @@
 
 import os
 import warnings
+from dataclasses import dataclass
 from typing import Any, Callable, Optional, Type, Union
 
 import torch
@@ -36,6 +37,7 @@ from transformers import (
     TrainingArguments,
     is_wandb_available,
 )
+from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
@@ -43,7 +45,7 @@ from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, pack_examples
 from .sft_config import SFTConfig
-from .utils import ConstantLengthDataset, generate_model_card
+from .utils import ConstantLengthDataset, generate_model_card, pad
 
 
 if is_peft_available():
@@ -54,6 +56,75 @@ if is_liger_kernel_available():
 
 if is_wandb_available():
     import wandb
+
+
+@dataclass
+class DataCollatorForPromptCompletion(DataCollatorMixin):
+    """
+    Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch if they
+    are not all of the same length.
+
+    Args:
+        pad_token_id (`int`):
+            Token ID to use for padding.
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
+            Type of Tensor to return. Only `"pt"` is currently supported.
+        mask_completion (`bool`, *optional*, defaults to `False`):
+            Whether to mask the completion in the loss computation.
+
+    Examples:
+    ```python
+    >>> from trl import PreferenceCollator
+    >>> collator = PreferenceCollator(pad_token_id=0)
+    >>> examples = [
+    ...     {"prompt_input_ids": [1, 2, 3], "completion_input_ids": [4, 5]},
+    ...     {"prompt_input_ids": [7, 8], "completion_input_ids": [9, 10]}
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[ 1,  2,  3,  4,  5],
+                          [ 7,  8,  9, 10,  0]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1],
+                               [1, 1, 1, 1, 0]]),
+     'labels': tensor([[   1,    2,    3,    4,    5],
+                       [   7,    8,    9,   10, -100]])}
+    >>> collator = PreferenceCollator(pad_token_id=0, mask_completion=True)
+    {'input_ids': tensor([[1, 2, 3, 4, 5],
+                          [7, 8, 9, 10, 0]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1],
+                               [1, 1, 1, 1, 0]]),
+     'labels': tensor([[-100, -100, -100,    4,    5],
+                       [-100, -100,    9,   10, -100]])}
+    ```
+    """
+
+    pad_token_id: int
+    return_tensors: str = "pt"
+    mask_completion: bool = False
+
+    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+        # Create the label
+        if self.mask_completion:
+            prompt_labels = [[-100] * len(example["prompt_input_ids"]) for example in examples]
+        else:
+            prompt_labels = [example["prompt_input_ids"] for example in examples]
+        completion_labels = [example["completion_input_ids"] for example in examples]
+
+        # Concatenate the prompt and completion
+        input_ids = [example["prompt_input_ids"] + example["completion_input_ids"] for example in examples]
+        labels = [p + c for p, c in zip(prompt_labels, completion_labels)]
+
+        # Convert to tensor
+        input_ids = [torch.tensor(seq) for seq in input_ids]
+        attention_mask = [torch.ones_like(seq) for seq in input_ids]
+        labels = [torch.tensor(seq) for seq in labels]
+
+        # Pad
+        output = {}
+        output["input_ids"] = pad(input_ids, padding_value=self.pad_token_id)
+        output["attention_mask"] = pad(attention_mask, padding_value=0)
+        output["labels"] = pad(labels, padding_value=-100)
+
+        return output
 
 
 class SFTTrainer(Trainer):
@@ -199,8 +270,22 @@ class SFTTrainer(Trainer):
                     )
 
         # 5. Handle the data collator
+        if args.completion_only and data_collator is not None:
+            raise ValueError(
+                "You have passed a `data_collator` to the `SFTTrainer`, but `completion_only` is set to `True` in the "
+                "`SFTConfig`. Completion only logic is done in the collator. If you want to train on completions only "
+                "using a custom collator, you need to implement your collator accordingly by setting prompt labels to "
+                "`-100` and setting `completion_only` to `False` (default) in the `SFTConfig`."
+            )
+
         if data_collator is None:
-            data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
+            # The dataset is prompt-completion
+            if args.dataset_text_field in train_dataset.column_names:
+                data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
+            elif "prompt" in train_dataset.column_names and "completion" in train_dataset.column_names:
+                data_collator = DataCollatorForPromptCompletion(
+                    pad_token_id=processing_class.pad_token_id, mask_completion=args.completion_only
+                )
 
         # 6. Call the parent class constructor
         # Some arguments are only available for transformers>=4.47.0. Can be removed when the min version is bumped.
